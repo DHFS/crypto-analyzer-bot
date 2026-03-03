@@ -1,0 +1,61 @@
+name: Deploy to Tencent Cloud
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Setup SSH
+      uses: webfactory/ssh-agent@v0.7.0
+      with:
+        ssh-private-key: ${{ secrets.TENCENT_CLOUD_SSH_KEY }}
+    
+    - name: Add host to known hosts
+      run: |
+        mkdir -p ~/.ssh
+        ssh-keyscan -H ${{ secrets.TENCENT_CLOUD_HOST }} >> ~/.ssh/known_hosts
+    
+    - name: Deploy to Tencent Cloud
+      env:
+        HOST: ${{ secrets.TENCENT_CLOUD_HOST }}
+        USER: ${{ secrets.TENCENT_CLOUD_USER }}
+      run: |
+        echo "🚀 开始部署到腾讯云..."
+        
+        # 连接服务器并执行部署
+        ssh ${USER}@${HOST} << 'EOF'
+          set -e
+          
+          PROJECT_DIR="/opt/crypto-analyzer-bot"
+          SERVICE_NAME="crypto-bot"
+          
+          echo "📦 拉取最新代码..."
+          cd ${PROJECT_DIR}
+          git fetch origin
+          git reset --hard origin/main
+          
+          echo "🔧 更新依赖..."
+          source venv/bin/activate
+          pip install -r requirements.txt
+          
+          echo "🔄 重启服务..."
+          sudo systemctl restart ${SERVICE_NAME}
+          
+          echo "✅ 部署完成!"
+          sudo systemctl status ${SERVICE_NAME} --no-pager
+        EOF
+        
+        echo "🎉 部署成功!"
+    
+    - name: Notify on failure
+      if: failure()
+      run: |
+        echo "❌ 部署失败，请检查日志"
