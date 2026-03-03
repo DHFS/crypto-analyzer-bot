@@ -16,8 +16,14 @@ from discord import app_commands
 
 from config import config
 from services.alert import alert_service, alert_monitor_task
+from services.database import get_database_service
+from services.tracker import get_trade_tracker
 
 from handlers import setup_commands
+
+# 数据库和追踪器服务实例
+db_service = get_database_service()
+trade_tracker = get_trade_tracker()
 
 # 配置日志
 logging.basicConfig(
@@ -51,23 +57,30 @@ class CryptoAnalyzerBot(discord.Client):
         """Bot 启动时的钩子，用于注册命令和启动后台任务"""
         logger.info("🔧 正在初始化 Bot...")
         
-        # 注册斜杠命令
+        # 1. 初始化数据库
+        await db_service.init_db()
+        logger.info("✅ 数据库已初始化")
+        
+        # 2. 注册斜杠命令
         setup_commands(self, self.tree)
 
-        # 同步命令到 Discord
+        # 3. 同步命令到 Discord
         await self.tree.sync()
         logger.info("✅ 斜杠命令已同步")
         
-        # 设置预警服务的 Bot 实例
+        # 4. 设置预警服务的 Bot 实例
         alert_service.set_bot(self)
         
-        # 加载已保存的预警
+        # 5. 加载已保存的预警
         alert_service.load_from_file()
         
-        # 启动预警监控任务
+        # 6. 启动预警监控任务
         if not alert_monitor_task.is_running():
             alert_monitor_task.start()
             logger.info("🚨 预警监控任务已启动 (每5分钟检查一次)")
+        
+        # 7. 启动订单追踪器
+        await trade_tracker.start(interval_minutes=5)
         
         self.services_ready = True
         self.reconnect_count = 0  # 重置重连计数
@@ -109,6 +122,9 @@ class CryptoAnalyzerBot(discord.Client):
     async def close(self):
         """关闭 Bot 时的清理工作"""
         logger.info("🛑 正在关闭 Bot...")
+        
+        # 停止订单追踪器
+        await trade_tracker.stop()
         
         # 停止预警任务
         if alert_monitor_task.is_running():

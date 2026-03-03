@@ -224,6 +224,49 @@ class BinanceService:
             "ticker": results[3]
         }
 
+    async def get_leverage_brackets(self, symbol: str) -> list:
+        """获取交易对杠杆分层数据 (用于精确计算爆仓价)"""
+        symbol = self._normalize_symbol(symbol)
+        
+        try:
+            data = await self._request("/fapi/v1/leverageBracket", {"symbol": symbol})
+            if data and len(data) > 0:
+                brackets = data[0].get("brackets", [])
+                # 提取有用的信息
+                result = []
+                for bracket in brackets:
+                    result.append({
+                        "bracket": bracket.get("bracket"),
+                        "initial_leverage": bracket.get("initialLeverage"),
+                        "notional_cap": bracket.get("notionalCap"),
+                        "notional_floor": bracket.get("notionalFloor"),
+                        "maint_margin_ratio": bracket.get("maintMarginRatio"),
+                        "cum": bracket.get("cum"),
+                    })
+                return result
+            return []
+        except Exception:
+            # 如果 API 调用失败，返回默认值
+            return [{
+                "initial_leverage": 125,
+                "maint_margin_ratio": 0.004,
+                "notional_cap": 50000,
+            }]
+
+    def get_maintenance_margin_rate(self, leverage_brackets: list, position_value: float) -> float:
+        """根据仓位价值获取维持保证金率"""
+        if not leverage_brackets:
+            return 0.004  # 默认 0.4%
+        
+        for bracket in leverage_brackets:
+            notional_cap = bracket.get("notionalCap", float('inf'))
+            notional_floor = bracket.get("notionalFloor", 0)
+            if notional_floor <= position_value <= notional_cap:
+                return bracket.get("maint_margin_ratio", 0.004)
+        
+        # 如果超过最高档位，返回最后一档的维持保证金率
+        return leverage_brackets[-1].get("maint_margin_ratio", 0.5) if leverage_brackets else 0.004
+
     async def get_full_market_data(self, symbol: str, timeframe: str) -> dict:
         """获取完整的市场数据"""
         results = await asyncio.gather(
@@ -231,16 +274,22 @@ class BinanceService:
             self.get_funding_rate(symbol),
             self.get_open_interest(symbol),
             self.get_long_short_ratio(symbol, period="15m"),
+            self.get_leverage_brackets(symbol),
             return_exceptions=True
         )
 
-        for result in results:
+        for i, result in enumerate(results):
             if isinstance(result, Exception):
-                raise result
+                # 杠杆分层数据获取失败不影响其他数据
+                if i == 4:
+                    results[i] = []
+                else:
+                    raise result
 
         return {
             **results[0],
             "funding_rate": results[1],
             "open_interest": results[2],
             "long_short_ratio": results[3],
+            "leverage_brackets": results[4],
         }
